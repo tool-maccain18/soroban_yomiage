@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>そろばん 読み上げ算 練習ツール（v3-fix3）</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans JP", "Hiragino Kaku Gothic ProN", Meiryo, sans-serif; line-height: 1.6; margin: 1.2rem; }
+  h1 { font-size: 1.25rem; margin-bottom: .6rem; }
+  fieldset { border: 1px solid #ccc; border-radius: .6rem; padding: .8rem 1rem; margin-bottom: 1rem; }
+  label { display: inline-block; margin-right: .6rem; }
+  select, input[type="number"], input[type="range"], button { font-size: 1rem; padding: .35rem .6rem; }
+  .row { display: flex; flex-wrap: wrap; gap: .8rem; align-items: center; margin: .4rem 0; }
+  .grow { flex: 1 1 220px; }
+  .buttons { display: flex; gap: .6rem; flex-wrap: wrap; }
+  .log { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Consolas, "Roboto Mono", monospace;
+         border: 1px solid #ddd; border-radius: .5rem; padding: .6rem; min-height: 6rem; background: rgba(0,0,0,.03); }
+  .muted { opacity: .75; font-size: .92rem; }
+  .ok { color: #0b6; }
+  .warn { color: #b60; }
+  .err { color: #c33; }
+  .util { margin: .6rem 0 1rem; display: flex; gap: .6rem; flex-wrap: wrap; align-items: center; }
+</style>
+</head>
+<body>
+  <h1>そろばん 読み上げ算 練習ツール（v3-fix3）</h1>
+
+  <div class="util">
+    <button id="initVoicesBtn">🔧 音声を初期化</button>
+    <button id="testUtterBtn">🎤 テスト発話</button>
+    <span class="muted">※ 最初に「音声を初期化」を押してください（ユーザー操作が必要なブラウザがあります）。</span>
+  </div>
+
+  <fieldset>
+    <legend>設定</legend>
+
+    <div class="row">
+      <label>桁数：</label>
+      <input id="digits" type="number" min="2" max="12" value="3" />
+      <span class="muted">（2〜12桁）</span>
+    </div>
+
+    <div class="row">
+      <label>口数：</label>
+      <input id="terms" type="number" min="5" max="20" value="10" />
+      <span class="muted">（5〜20口）</span>
+    </div>
+
+    <div class="row">
+      <label>モード：</label>
+      <label><input type="radio" name="mode" value="add" checked /> 足し算のみ</label>
+      <label><input type="radio" name="mode" value="mix" /> 引き算を混ぜる（最大30%）</label>
+      <span class="muted">※ 途中結果がマイナスにならないよう制御</span>
+    </div>
+
+    <div class="row">
+      <label class="grow">読み上げ速度：
+        <input id="rate" type="range" min="0.6" max="1.6" step="0.05" value="1.0" style="width: 240px; vertical-align: middle;" />
+      </label>
+      <span id="rateVal">1.00×</span>
+      <label class="grow">各口の間隔（秒）：
+        <input id="gap" type="range" min="0.2" max="2.0" step="0.1" value="0.7" style="width: 240px; vertical-align: middle;" />
+      </label>
+      <span id="gapVal">0.7s</span>
+    </div>
+
+    <div class="row">
+      <label class="grow">答え前の待ち（秒）：
+        <input id="answerWait" type="range" min="0" max="10" step="0.5" value="5.0" style="width: 240px; vertical-align: middle;" />
+      </label>
+      <span id="answerWaitVal">5.0s</span>
+    </div>
+
+    <div class="row">
+      <label class="grow">ピッチ（高さ）：
+        <input id="pitch" type="range" min="0.8" max="1.4" step="0.05" value="1.00" style="width: 240px; vertical-align: middle;" />
+      </label>
+      <span id="pitchVal">1.00</span>
+    </div>
+
+    <div class="row">
+      <label>声（Voice）：</label>
+      <select id="voiceSelect" class="grow"></select>
+      <button id="refreshVoices" type="button" title="音声一覧を再取得">再取得</button>
+      <span class="muted">※ 日本語（ja-JP）推奨。環境依存です。</span>
+    </div>
+
+    <div class="row">
+      <label><input id="useKanji" type="checkbox" /> 数字を和文数詞（漢数字）で読む</label>
+      <span class="muted">例：123456789 → 十二億三千四百五十六万七千八百九十</span>
+    </div>
+
+    <div class="row">
+      <label><input id="speakAnswer" type="checkbox" checked /> 最後に答えを読み上げ・表示する</label>
+    </div>
+  </fieldset>
+
+  <div class="buttons">
+    <button id="startBtn">▶ 読み上げ開始</button>
+    <button id="pauseBtn" disabled>⏸ 一時停止</button>
+    <button id="resumeBtn" disabled>▶ 再開</button>
+    <button id="stopBtn" disabled>⏹ 停止</button>
+    <button id="previewBtn">🔊 1口プレビュー</button>
+  </div>
+
+  <p class="muted">※ タブがバックグラウンドだと読み上げが止まる/遅れることがあります。iOSはサイレント解除（サイドスイッチ/集中モードの見直し）も確認。</p>
+
+  <h2>進行ログ / 式</h2>
+  <div id="log" class="log" aria-live="polite"></div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const digitsEl = $('digits'), termsEl = $('terms');
+  const rateEl = $('rate'), gapEl = $('gap');
+  const answerWaitEl = $('answerWait'), pitchEl = $('pitch');
+  const rateValEl = $('rateVal'), gapValEl = $('gapVal');
+  const answerWaitValEl = $('answerWaitVal'), pitchValEl = $('pitchVal');
+  const voiceSelect = $('voiceSelect'), useKanjiEl = $('useKanji');
+  const speakAnswerEl = $('speakAnswer'), logEl = $('log');
+
+  const startBtn = $('startBtn'), pauseBtn = $('pauseBtn');
+  const resumeBtn = $('resumeBtn'), stopBtn = $('stopBtn');
+  const previewBtn = $('previewBtn'), refreshVoicesBtn = $('refreshVoices');
+  const initVoicesBtn = $('initVoicesBtn'), testUtterBtn = $('testUtterBtn');
+
+  let voices = [];
+  let isRunning = false;
+  let cancelRequested = false;
+  let voicesReady = false;
+
+  const numToSpeechText = (n, useKanji=false) => useKanji ? intToKanji(n) : String(n);
+
+  function randInt(min, max){ return Math.floor(Math.random()*(max-min+1))+min; }
+  function clampInt(v,min,max){ if(Number.isNaN(v)) return min; return Math.min(max, Math.max(min, Math.round(v))); }
+
+  // 12桁対応の簡易漢数字化（万・億まで）
+  function intToKanji(n){
+    if(n===0) return '零';
+    const unitsLarge=['','万','億','兆'];
+    const digitsKanji=['零','一','二','三','四','五','六','七','八','九'];
+    let s=''; let idx=0;
+    while(n>0){
+      const g=n%10000;
+      if(g!==0){
+        let t=''; const d0=g%10, d1=Math.floor(g/10)%10, d2=Math.floor(g/100)%10, d3=Math.floor(g/1000)%10;
+        if(d3>0) t+=(d3===1?'':digitsKanji[d3])+'千';
+        if(d2>0) t+=(d2===1?'':digitsKanji[d2])+'百';
+        if(d1>0) t+=(d1===1?'':digitsKanji[d1])+'十';
+        if(d0>0) t+=digitsKanji[d0];
+        s=t+unitsLarge[idx]+s;
+      }
+      idx++; n=Math.floor(n/10000);
+    }
+    return s;
+  }
+
+  function generateSequence(digits, terms, allowMinusRatio){
+    const minVal=Math.pow(10,digits-1), maxVal=Math.pow(10,digits)-1;
+    const seq=[]; let total=0;
+    for(let i=0;i<terms;i++){
+      const val=randInt(minVal,maxVal);
+      let op='+';
+      if(allowMinusRatio>0 && i>0 && Math.random()<allowMinusRatio) op='-';
+      if(op==='-' && total-val<0) op='+';
+      seq.push({op,val}); total += (op==='+'?val:-val);
+    }
+    const minusCap=Math.floor(terms*0.30);
+    let minusCount=seq.filter(s=>s.op==='-').length;
+    if(minusCount>minusCap){
+      for(let i=seq.length-1;i>=0 && minusCount>minusCap;i--){
+        if(seq[i].op==='-'){ seq[i].op='+'; minusCount--; }
+      }
+      total=seq.reduce((a,s)=>a+(s.op==='+'?s.val:-s.val),0);
+      if(total<0){
+        for(let i=seq.length-1;i>=0 && total<0;i--){
+          if(seq[i].op==='-'){ seq[i].op='+'; total+=2*seq[i].val; }
+        }
+      }
+    }
+    return {seq,total};
+  }
+
+  // ---------- ログ ----------
+  function log(msg, cls){ const d=document.createElement('div'); if(cls) d.className=cls; d.textContent=msg; logEl.appendChild(d); logEl.scrollTop=logEl.scrollHeight; }
+  function clearLog(){ logEl.innerHTML=''; }
+
+  // ---------- Voices 初期化（ユーザー操作必須） ----------
+  async function ensureVoicesLoadedWithGesture(maxTotalMs=4000){
+    // 一度キャンセルして内部状態をリセット（念のため）
+    try{ speechSynthesis.cancel(); }catch{}
+    // ダミー発話（無音に近い）でロードを促す
+    await new Promise((res)=>{
+      const u=new SpeechSynthesisUtterance(' ');
+      u.volume=0; u.rate=1.0; u.onend=()=>res(); u.onerror=()=>res();
+      try{ speechSynthesis.speak(u); }catch{ res(); }
+    });
+
+    // onvoiceschanged を待ちつつポーリング
+    const start=performance.now();
+    const waitVoices=()=>new Promise((resolve)=> {
+      let done=false;
+      const check=()=>{
+        const v=speechSynthesis.getVoices();
+        if(v && v.length>0 && !done){ done=true; resolve(v); }
+        else if((performance.now()-start) >= maxTotalMs && !done){ done=true; resolve(v); }
+        else if(!done){ setTimeout(check, 100); }
+      };
+      const handler=()=>{
+        const v=speechSynthesis.getVoices();
+        if(v && v.length>0 && !done){ done=true; resolve(v); }
+      };
+      try{ speechSynthesis.addEventListener('voiceschanged', handler, {once:true}); }catch{ /* Safari 旧版は onvoiceschanged */ }
+      if ('onvoiceschanged' in speechSynthesis) speechSynthesis.onvoiceschanged = handler;
+      check();
+    });
+
+    const v = await waitVoices();
+    return v || [];
+  }
+
+  async function populateVoices(){
+    const prev=voiceSelect.value;
+    const v = await ensureVoicesLoadedWithGesture(4000);
+    voices = Array.isArray(v) ? v : [];
+    voiceSelect.innerHTML='';
+
+    if(!voices || voices.length===0){
+      const opt=document.createElement('option');
+      opt.value=''; opt.textContent='（音声が取得できませんでした）';
+      voiceSelect.appendChild(opt);
+      log('音声の取得に失敗しました。iOSはサイレント解除／端末の音量UP／ユーザー操作後に「再取得」をお試しください。', 'warn');
+      voicesReady=false;
+      return;
+    }
+
+    const ja=voices.filter(v=> (v.lang||'').toLowerCase().startsWith('ja'));
+    const others=voices.filter(v=> !(v.lang||'').toLowerCase().startsWith('ja'));
+    [...ja, ...others].forEach(v=>{
+      const opt=document.createElement('option');
+      opt.value=v.name; opt.textContent=`${v.name}  [${v.lang}${v.localService?' / local':''}]`;
+      voiceSelect.appendChild(opt);
+    });
+
+    // 以前の選択 or 日本語優先
+    if(prev && [...voiceSelect.options].some(o=>o.value===prev)) voiceSelect.value=prev;
+    else if(ja.length>0) voiceSelect.value=ja[0].name;
+
+    voicesReady=true;
+    log(`音声一覧を取得：${voices.length}件（選択中：${voiceSelect.value || '既定'}）`, 'muted');
+  }
+
+  function pickVoiceByName(name){ return voices.find(v=>v.name===name) || null; }
+
+  // ---------- 発話 ----------
+  function speakText(text, {rate=1.0, pitch=1.0, voice=null}={}){
+    return new Promise((resolve,reject)=>{
+      if(!text) return resolve();
+      const u=new SpeechSynthesisUtterance(text);
+      if(voice) u.voice=voice; else u.lang='ja-JP';
+      u.rate=rate; u.pitch=pitch;
+      u.onend=()=>resolve(); u.onerror=(e)=>reject(e.error||e);
+      try{ speechSynthesis.speak(u); }catch(e){ reject(e); }
+    });
+  }
+
+  function sleep(ms){ return new Promise(res=>setTimeout(res, ms)); }
+
+  // ---------- UI 表示値 ----------
+  rateEl.addEventListener('input', ()=> rateValEl.textContent = `${parseFloat(rateEl.value).toFixed(2)}×`);
+  gapEl.addEventListener('input',  ()=> gapValEl.textContent  = `${parseFloat(gapEl.value).toFixed(1)}s`);
+  answerWaitEl.addEventListener('input', ()=> answerWaitValEl.textContent = `${parseFloat(answerWaitEl.value).toFixed(1)}s`);
+  pitchEl.addEventListener('input', ()=> pitchValEl.textContent = `${parseFloat(pitchEl.value).toFixed(2)}`);
+  rateValEl.textContent=`${parseFloat(rateEl.value).toFixed(2)}×`;
+  gapValEl.textContent =`${parseFloat(gapEl.value).toFixed(1)}s`;
+  answerWaitValEl.textContent=`${parseFloat(answerWaitEl.value).toFixed(1)}s`;
+  pitchValEl.textContent=`${parseFloat(pitchEl.value).toFixed(2)}`;
+
+  // ---------- ユーティリティ操作 ----------
+  initVoicesBtn.addEventListener('click', async ()=>{
+    clearLog();
+    log('音声初期化中…（数秒かかる場合があります）', 'muted');
+    await populateVoices();
+  });
+
+  testUtterBtn.addEventListener('click', async ()=>{
+    try{
+      const v = pickVoiceByName(voiceSelect.value);
+      await speakText('テストです。', { rate:1.0, pitch:1.0, voice:v });
+      log(`テスト発話 OK（${v ? v.name+' ['+v.lang+']' : '既定 ja-JP'}）`, 'ok');
+    }catch(e){
+      log(`テスト発話に失敗：${e}`, 'err');
+    }
+  });
+
+  refreshVoicesBtn.addEventListener('click', async ()=>{ await populateVoices(); });
+
+  // ---------- プレビュー ----------
+  previewBtn.addEventListener('click', async ()=>{
+    if(!voicesReady){ log('先に「音声を初期化」を押してください。', 'warn'); return; }
+    const voice=pickVoiceByName(voiceSelect.value);
+    const rate=parseFloat(rateEl.value), pitch=parseFloat(pitchEl.value);
+    const useKanji=useKanjiEl.checked;
+    const val=randInt(10,99);
+    const text=`${numToSpeechText(val, useKanji)}円なりー`;
+    try{
+      await speakText(text, { rate, pitch, voice });
+      log(`プレビュー音声：${voice ? `${voice.name} [${voice.lang}]` : '既定（ja-JP）'}`, 'muted');
+    }catch(e){ log(`プレビューに失敗：${e}`, 'err'); }
+  });
+
+  // ---------- 本番開始 ----------
+  startBtn.addEventListener('click', async ()=>{
+    if(!voicesReady){ log('先に「音声を初期化」を押してください。', 'warn'); return; }
+
+    const digits=clampInt(+digitsEl.value,2,12);
+    const terms =clampInt(+termsEl.value,5,20);
+    const mode  =document.querySelector('input[name="mode"]:checked').value;
+    const allowMinusRatio=(mode==='mix') ? 0.30 : 0.0;
+    const rate  =parseFloat(rateEl.value);
+    const gapSec=parseFloat(gapEl.value);
+    const answerWaitSec=parseFloat(answerWaitEl.value);
+    const pitch =parseFloat(pitchEl.value);
+    const voice =pickVoiceByName(voiceSelect.value);
+    const useKanji=useKanjiEl.checked;
+
+    digitsEl.value=digits; termsEl.value=terms;
+    clearLog();
+    log(`【設定】桁数:${digits}桁 / 口数:${terms}口 / モード:${mode==='add'?'足し算のみ':'引き算混在（〜30%）'} / 速度:${rate.toFixed(2)}× / 間隔:${gapSec.toFixed(1)}s / ピッチ:${pitch.toFixed(2)} / 答え前待ち:${answerWaitSec.toFixed(1)}s / 漢数字:${useKanji?'ON':'OFF'}`, 'muted');
+    log(`使用音声：${voice ? `${voice.name} [${voice.lang}]` : '既定（ja-JP）'}`, 'muted');
+
+    const {seq,total}=generateSequence(digits,terms,allowMinusRatio);
+    log(`式： ${seq.map((s,i)=> (i===0?`${s.val}`:`${s.op}${s.val}`)).join(' ')}`, 'ok');
+
+    isRunning=true; cancelRequested=false; updateButtons();
+
+    try{
+      // 冒頭：珠算慣習
+      await speakText('ねがいましてわー', { rate, pitch, voice });
+      await sleep(250);
+
+      let prevOp=null;
+      for(let i=0;i<seq.length;i++){
+        if(cancelRequested) throw new Error('cancelled');
+        const {op,val}=seq[i];
+
+        // 符合が変わる時だけ接続語（間合いは120ms）
+        if(i>0 && op!==prevOp){
+          const connector = (op === '+') ? 'くわえてー' : 'とってわ';
+          await speakText(connector, { rate, pitch, voice });
+          await sleep(120);
+        }
+
+        const isLast=(i===seq.length-1);
+        const tail=isLast ? '円では' : '円なりー';
+        const text=`${numToSpeechText(val,useKanji)}${tail}`;
+        await speakText(text, { rate, pitch, voice });
+
+        log(`【${i+1}口目】 ${i===0?'':op}${val}  → 読み：「${useKanji?intToKanji(val):val}${isLast?'円では':'円なりー'}」`);
+        prevOp=op;
+
+        const gapMs=Math.max(0,gapSec*1000);
+        if(!isLast && gapMs>0) await sleep(gapMs);
+      }
+
+      if(speakAnswerEl.checked){
+        await sleep(Math.max(0,answerWaitSec*1000));
+        await speakText('こたえは', { rate, pitch, voice });
+        await sleep(150);
+        const ansText=`${numToSpeechText(total,useKanji)}。です。`;
+        await speakText(ansText, { rate:Math.min(1.2, rate+0.05), pitch, voice });
+        log(`答え： ${total}（読み：「${useKanji?intToKanji(total):total}。です。」）`, 'ok');
+      } else {
+        log('（答えの読み上げはオフ）','muted');
+      }
+
+      // ご指定により終了の定型句は無し
+    }catch(e){
+      if(e && e.message!=='cancelled'){ log(`読み上げ中にエラー：${e}`, 'err'); }
+      else{ log('停止しました', 'warn'); }
+      try{ speechSynthesis.cancel(); }catch{}
+    }finally{
+      isRunning=false; cancelRequested=false; updateButtons();
+    }
+  });
+
+  pauseBtn.addEventListener('click', ()=>{ if(!isRunning) return; speechSynthesis.pause(); updateButtons(); });
+  resumeBtn.addEventListener('click', ()=>{ if(!isRunning) return; speechSynthesis.resume(); updateButtons(); });
+  stopBtn.addEventListener('click', ()=>{ if(!isRunning) return; cancelRequested=true; speechSynthesis.cancel(); isRunning=false; updateButtons(); });
+
+  function updateButtons(){
+    startBtn.disabled=isRunning;
+    pauseBtn.disabled=!isRunning;
+    resumeBtn.disabled=!isRunning;
+    stopBtn.disabled=!isRunning;
+  }
+
+  // タブ再表示時に voices が消えるブラウザ対策（任意再取得）
+  document.addEventListener('visibilitychange', async ()=>{
+    if(document.visibilityState==='visible' && voicesReady && speechSynthesis.getVoices().length===0){
+      log('タブ復帰に伴い音声を再取得します…','muted');
+      await populateVoices();
+    }
+  });
+})();
+</script>
+</body>
+</html>
+``
